@@ -5,7 +5,8 @@ Socks5、Http代理
     mkdir proxy
     cd proxy
     
-    composer require myphps/socks5-http-proxy
+    composer require myphps/socks5-http-proxy:dev-master
+
     
     cp vendor/myphps/socks5-http-proxy/run.example.php run.php
     cp vendor/myphps/socks5-http-proxy/config.example.php config.php

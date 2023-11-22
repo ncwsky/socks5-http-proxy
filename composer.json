@@ -8,5 +8,10 @@
     "require": {
         "php": ">=7.0",
         "myphps/my-php-srv": "^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "common\\": "./common"
+        }
     }
 }
