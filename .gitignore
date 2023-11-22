@@ -1,0 +1,7 @@
+/vendor
+/.idea
+/runLock
+/log
+/log.log
+/*.pid
+/*.lock

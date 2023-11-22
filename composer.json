@@ -1,0 +1,12 @@
+{
+    "name": "myphps/socks5-http-proxy",
+    "description": "socks5、http代理",
+    "license": "MIT",
+    "keywords": ["mq"],
+    "homepage": "https://github.com/myphps/socks5-http-proxy",
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=7.0",
+        "myphps/my-php-srv": "^3.0"
+    }
+}
