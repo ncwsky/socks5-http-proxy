@@ -3,7 +3,7 @@
     "description": "socks5、http代理",
     "license": "MIT",
     "keywords": ["mq"],
-    "homepage": "https://github.com/myphps/socks5-http-proxy",
+    "homepage": "https://github.com/ncwsky/socks5-http-proxy",
     "minimum-stability": "dev",
     "require": {
         "php": ">=7.0",
