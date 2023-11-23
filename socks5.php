@@ -42,7 +42,7 @@ if ($config && file_exists($config)) {
         exit(0);
     }
 } else {
-    $ini = require(__DIR__ . '/config.php');
+    $ini = require(file_exists(RUN_DIR . '/config.php') ? RUN_DIR . '/config.php' : __DIR__ . '/config.example.php');
     //处理命令参数
     $tcp_port = (int)GetOpt::val('p', 'port');
     $udp_port = (int)GetOpt::val('u', 'udp');
