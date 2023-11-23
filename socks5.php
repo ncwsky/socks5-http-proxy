@@ -3,11 +3,11 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 'On');// 有些环境关闭了错误显示
 
-if (realpath(dirname($_SERVER['SCRIPT_FILENAME'])) != __DIR__ && !defined('RUN_DIR')) {
+if (!defined('RUN_DIR') && realpath(dirname($_SERVER['SCRIPT_FILENAME'])) != __DIR__) {
     define('RUN_DIR', realpath(dirname($_SERVER['SCRIPT_FILENAME'])));
 }
-
 defined('RUN_DIR') || define('RUN_DIR', __DIR__);
+
 if (!defined('VENDOR_DIR')) {
     if (is_dir(__DIR__ . '/vendor')) {
         define('VENDOR_DIR', __DIR__ . '/vendor');
@@ -18,14 +18,12 @@ if (!defined('VENDOR_DIR')) {
     }
 }
 
-defined('MY_PHP_DIR') || define('MY_PHP_DIR', VENDOR_DIR . '/myphps/myphp');
-defined('IS_SWOOLE') || define('IS_SWOOLE', 0);
 defined('STOP_TIMEOUT') || define('STOP_TIMEOUT', 10); //进程结束超时时间 秒
 defined('MAX_INPUT_SIZE') || define('MAX_INPUT_SIZE', 2097152); //接收包限制大小1M 1048576
 
+defined('MY_PHP_DIR') || define('MY_PHP_DIR', VENDOR_DIR . '/myphps/myphp');
 require VENDOR_DIR . '/autoload.php';
 require MY_PHP_DIR . '/GetOpt.php';
-defined('MY_PHP_SRV_DIR') && require MY_PHP_SRV_DIR . '/Load.php';
 
 //解析命令参数
 GetOpt::parse('hp:l:u:c:e:r:E:w:', ['help', 'port:', 'listen:','udp:','key:','relay:','relay_key:','wan_ip:']);
@@ -119,14 +117,12 @@ $conf = [
         },
         'onConnect' => function (Workerman\Connection\TcpConnection $conn) {
             logger(LOG_DEBUG, 'tcp conn:' . $conn->id);
-            //\common\Socks5::onConnect($conn);
             \common\Socks5::connect($conn);
         },
         'onClose' => function (Workerman\Connection\TcpConnection $conn){
             \SrvBase::$isConsole && SrvBase::safeEcho(date("Y-m-d H:i:s.").substr(microtime(),2, 5).' onClose '.$conn->id.PHP_EOL);
         },
         'onMessage' => function (Workerman\Connection\TcpConnection $conn, $data) {
-            //\common\Socks5::proxySocks($conn, $data);
             \common\Socks5::handle($conn, $data);
         },
     ],
@@ -177,7 +173,7 @@ if ($ini['common']['ens_key']) {
     $conf['setting']['protocol'] = '\\Workerman\\Protocols\\Frame';
     $conf['listen']['udp']['setting']['protocol'] = '\\Workerman\\Protocols\\Frame';
 }
-// 设置每个连接接收的数据包最大为64K
+// 设置每个连接接收的最大数据包
 \Workerman\Connection\TcpConnection::$defaultMaxPackageSize = MAX_INPUT_SIZE;
 $srv = new WorkerManSrv($conf);
 Worker2::$stopTimeout = STOP_TIMEOUT; //强制进程结束等待时间
@@ -185,9 +181,8 @@ $srv->run($argv);
 
 function logger($level, $str)
 {
-    //return;
     global $ini;
-    if ($ini['common']['log_level'] >= $level) {
+    if ($ini['common']['debug'] || $level!=LOG_DEBUG) {
         SrvBase::safeEcho(date("Y-m-d H:i:s.") . substr(microtime(), 2, 5) . ' ' . $str . PHP_EOL);
     }
 }

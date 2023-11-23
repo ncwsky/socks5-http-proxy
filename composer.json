@@ -2,7 +2,7 @@
     "name": "myphps/socks5-http-proxy",
     "description": "socks5、http代理",
     "license": "MIT",
-    "keywords": ["mq"],
+    "keywords": ["socks5", "proxy"],
     "homepage": "https://github.com/ncwsky/socks5-http-proxy",
     "minimum-stability": "dev",
     "require": {
