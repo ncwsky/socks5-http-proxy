@@ -18,6 +18,7 @@ if (!defined('VENDOR_DIR')) {
     }
 }
 
+defined('PROC_COUNT') || define('PROC_COUNT', 2); //进程数
 defined('STOP_TIMEOUT') || define('STOP_TIMEOUT', 10); //进程结束超时时间 秒
 defined('MAX_INPUT_SIZE') || define('MAX_INPUT_SIZE', 2097152); //接收包限制大小1M 1048576
 
@@ -106,7 +107,7 @@ $conf = [
     'port' => $port,
     'type' => 'tcp',
     'setting' => [
-        'count' => 10, //单进程模式
+        'count' => PROC_COUNT, //单进程模式
         'stdoutFile' => RUN_DIR . '/log.log', //终端输出
         'pidFile' => RUN_DIR . '/socks'.$port.'.pid',  //pid_file
         'logFile' => RUN_DIR . '/log.log', //日志文件 log_file
@@ -132,7 +133,7 @@ $conf = [
             'ip' => $listen,
             'port' => $udp_port,
             'setting' => [
-                'count' => 10,
+                'count' => PROC_COUNT,
             ],
             'event' => [
                 'onWorkerStart' => function (Workerman\Worker $worker) use($ini) {
