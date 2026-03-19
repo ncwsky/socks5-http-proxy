@@ -1,10 +1,11 @@
 <?php
+
 return [
-    'common'=>[
+    'common' => [
         "auth" => false,
         'user' => 'user',
         'pass' => 'pass',
-        'ens_key'=>'', //数据加密key
+        'ens_key' => '', //数据加密key
         "debug" => false,
         "tcp_port" => 1081,
         "udp_port" => 0, //设置为0时同tcp_port

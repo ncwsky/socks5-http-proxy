@@ -1,0 +1,15 @@
+parameters:
+    level: 5
+    treatPhpDocTypesAsCertain: false
+    paths:
+        - .
+    bootstrapFiles:
+        - vendor/myphps/myphp/base.php
+        - vendor/myphps/myphp/GetOpt.php
+    excludePaths:
+        - vendor
+        - cli.php
+        - config.example.php
+
+    ignoreErrors:
+        - '#::\$protocol#'

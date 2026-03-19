@@ -2,57 +2,57 @@
 
 namespace common;
 
-use \Workerman\Connection\AsyncTcpConnection;
-use \Workerman\Connection\AsyncUdpConnection;
-use \Workerman\Connection\TcpConnection;
+use Workerman\Connection\AsyncTcpConnection;
+use Workerman\Connection\AsyncUdpConnection;
+use Workerman\Connection\TcpConnection;
 use Workerman\Connection\UdpConnection;
 use Workerman\Worker;
 
 class Socks5
 {
-    const SOCKS_VER = "\x05";
-    const INIT_ERR = "\x05\xff";
-    const AUTH_OK = "\x01\x00";
-    const AUTH_FAIL = "\x01\x01";
+    public const SOCKS_VER = "\x05";
+    public const INIT_ERR = "\x05\xff";
+    public const AUTH_OK = "\x01\x00";
+    public const AUTH_FAIL = "\x01\x01";
 
     /**-------全局常量----------**/
-    const STAGE_INIT = 0;
-    const STAGE_AUTH = 1;
-    const STAGE_ADDR = 2;
-    const STAGE_UDP_ASSOC = 3;
-    const STAGE_DNS = 4;
-    const STAGE_CONNECTING = 5;
-    const STAGE_STREAM = 6;
-    const STAGE_DESTROYED = -1;
+    public const STAGE_INIT = 0;
+    public const STAGE_AUTH = 1;
+    public const STAGE_ADDR = 2;
+    public const STAGE_UDP_ASSOC = 3;
+    public const STAGE_DNS = 4;
+    public const STAGE_CONNECTING = 5;
+    public const STAGE_STREAM = 6;
+    public const STAGE_DESTROYED = -1;
 
     /**
      * COMMAND 命令
      */
-    const CMD_CONNECT = 0x01;  //CONNECT 连接目标服务器
+    public const CMD_CONNECT = 0x01;  //CONNECT 连接目标服务器
     /**
      * BIND 绑定，客户端会接收来自代理服务器的链接，也就是说告诉代理服务器创建socket，监听来自目标机器的连接。像FTP服务器这种主动连接客户端的应用场景
      */
-    const CMD_BIND = 0x02;
-    const CMD_UDP_ASSOCIATE = 0x03; //UDP ASSOCIATE UDP中继
+    public const CMD_BIND = 0x02;
+    public const CMD_UDP_ASSOCIATE = 0x03; //UDP ASSOCIATE UDP中继
 
     /**
      * RESPONSE 响应命令
      */
-    const REP_OK = 0; //代理服务器连接目标服务器成功
-    const REP_GENERAL = 1; //代理服务器故障
-    const REP_NOT_ALLOW = 2; //代理服务器规则集不允许连接
-    const REP_NETWORK = 3; //网络无法访问
-    const REP_HOST = 4; //目标服务器无法访问（主机名无效）
-    const REP_REFUSE = 5; //连接目标服务器被拒绝
-    const REP_TTL_EXPIRED = 6; //TTL已过期
-    const REP_UNKNOW_COMMAND = 7; //不支持的命令
-    const REP_UNKNOW_ADDR_TYPE = 8; //不支持的目标服务器地址类型
-    const REP_UNKNOW = 9; //0xFF 未分配
+    public const REP_OK = 0; //代理服务器连接目标服务器成功
+    public const REP_GENERAL = 1; //代理服务器故障
+    public const REP_NOT_ALLOW = 2; //代理服务器规则集不允许连接
+    public const REP_NETWORK = 3; //网络无法访问
+    public const REP_HOST = 4; //目标服务器无法访问（主机名无效）
+    public const REP_REFUSE = 5; //连接目标服务器被拒绝
+    public const REP_TTL_EXPIRED = 6; //TTL已过期
+    public const REP_UNKNOW_COMMAND = 7; //不支持的命令
+    public const REP_UNKNOW_ADDR_TYPE = 8; //不支持的目标服务器地址类型
+    public const REP_UNKNOW = 9; //0xFF 未分配
 
     //ADDRESS_TYPE  目标服务器地址类型
-    const ADDRTYPE_IPV4 = 0x01;  //IP V4地址
-    const ADDRTYPE_HOST = 0x03; //域名地址 域名地址的第1个字节为域名长度，剩下字节为域名名称字节数组
-    const ADDRTYPE_IPV6 = 0x04;
+    public const ADDRTYPE_IPV4 = 0x01;  //IP V4地址
+    public const ADDRTYPE_HOST = 0x03; //域名地址 域名地址的第1个字节为域名长度，剩下字节为域名名称字节数组
+    public const ADDRTYPE_IPV6 = 0x04;
 
     /**
      * METHOD定义
@@ -64,9 +64,14 @@ class Socks5
      * 0x80 - 0xFE 私有方法保留
      * 0xFF 无支持的认证方法
      */
-    const METHOD_NO_AUTH = 0x00;
-    const METHOD_GSSAPI = 0x01;
-    const METHOD_USER_PASS = 0x02;
+    public const METHOD_NO_AUTH = 0x00;
+    public const METHOD_GSSAPI = 0x01;
+    public const METHOD_USER_PASS = 0x02;
+
+    /**
+     * @var array spl_object_id=>[conn, dead_time]
+     */
+    public static $udpConnections = [];
 
     public static $methodMap = [
         self::METHOD_NO_AUTH => 'NoAuth',
@@ -106,7 +111,7 @@ class Socks5
         ]
     ];
 
-    public static function init(array $config)
+    public static function init(array $config, $udp = false)
     {
         if ($config) {
             self::$config = array_merge(self::$config, $config);
@@ -121,8 +126,25 @@ class Socks5
         if (!empty($config['relay']['endpoint'])) {
             self::$config['relay']['port'] = (int)substr(strrchr(self::$config['relay']['endpoint'], ':'), 1);
         }
-        if (empty($config['common']['ens_key'])) $config['common']['ens_key'] = '';
-        if (empty($config['relay']['ens_key'])) $config['relay']['ens_key'] = '';
+        if (empty($config['common']['ens_key'])) {
+            $config['common']['ens_key'] = '';
+        }
+        if (empty($config['relay']['ens_key'])) {
+            $config['relay']['ens_key'] = '';
+        }
+
+        if ($udp) { //udp初始定时清理连接
+            \Workerman\Timer::add(1, function () {
+                foreach (self::$udpConnections as $id => $item) {
+                    [$remote_connection, $deadTime, $udp_connection] = $item;
+                    if ($deadTime < time()) {
+                        $remote_connection->close();
+                        $udp_connection->close();
+                        unset(self::$udpConnections[$id]);
+                    }
+                }
+            });
+        }
     }
 
     //目标服务器地址类型 ipv4
@@ -155,7 +177,7 @@ class Socks5
      */
     public static function packResponse(int $response = self::REP_OK, int $rsv = 0, int $address_type = self::ADDRTYPE_IPV4, string $bndAddr = '0.0.0.0', int $bndPort = 0)
     {
-        $data = "";
+        $data = '';
         $data .= self::SOCKS_VER; //VERSION SOCKS协议版本，固定0x05
         $data .= chr($response);
         $data .= chr($rsv); //RSV 保留字段
@@ -165,7 +187,7 @@ class Socks5
             case self::ADDRTYPE_IPV4:
                 $tmp = explode('.', $bndAddr);
                 foreach ($tmp as $block) {
-                    $data .= chr($block);
+                    $data .= chr((int)$block);
                 }
                 break;
             case self::ADDRTYPE_HOST:
@@ -204,7 +226,7 @@ class Socks5
                     // var_dump(ord($tmp[$i]));
                     $ip += ord($tmp[$i]) * pow(256, 3 - $i);
                 }
-                $request['dest_addr'] = long2ip($ip);;
+                $request['dest_addr'] = long2ip($ip);
                 $offset += 4;
                 break;
             case self::ADDRTYPE_HOST:
@@ -244,7 +266,7 @@ class Socks5
         return true;
     }
 
-    public static function connect(TcpConnection $conn, bool $socks=false)
+    public static function connect(TcpConnection $conn, bool $socks = false)
     {
         //有代理中继
         if (!empty(self::$config['relay']['endpoint'])) {
@@ -272,10 +294,10 @@ class Socks5
             $relay->connect();
             return;
         }
-        $conn->hasRecvData = false;
+        $conn->context->hasRecvData = false;
         if ($socks) {
-            $conn->stage = self::STAGE_INIT;
-            $conn->auth_type = null;
+            $conn->context->stage = self::STAGE_INIT;
+            $conn->context->auth_type = null;
         }
     }
 
@@ -289,35 +311,35 @@ class Socks5
         }
         logger(LOG_DEBUG, "recv<- " . $conn->getRemoteAddress() . ' <-> ' . $conn->getLocalAddress() . ":" . bin2hex(substr($data, 0, 40)));
         //第一次收到数据时判断请求类型 http|socks5
-        if (!$conn->hasRecvData) {
-            $conn->hasRecvData = true;
+        if (!$conn->context->hasRecvData) {
+            $conn->context->hasRecvData = true;
 
             if (substr($data, 0, 4) === 'CONN') {
                 // http
             } else {
                 //socks
-                $conn->stage = self::STAGE_INIT;
-                $conn->auth_type = NULL;
+                $conn->context->stage = self::STAGE_INIT;
+                $conn->context->auth_type = null;
             }
         }
 
-        if (isset($conn->stage)) {
+        if (isset($conn->context->stage)) {
             self::proxySocks($conn, $data, false);
         } else {
             self::proxyHttp($conn, $data, false);
         }
     }
 
-    public static function proxySocks(\Workerman\Connection\TcpConnection $conn, string &$buffer, $decrypt=true)
+    public static function proxySocks(\Workerman\Connection\TcpConnection $conn, string &$buffer, $decrypt = true)
     {
         //解密数据
         if ($decrypt && self::$config['common']['ens_key']) {
-            logger(LOG_DEBUG, '<-socks ' . Socks5::$stageMap[$conn->stage] . ' 解密前:' . bin2hex(substr($buffer, 0, 20)));
+            logger(LOG_DEBUG, '<-socks ' . Socks5::$stageMap[$conn->context->stage] . ' 解密前:' . bin2hex(substr($buffer, 0, 20)));
             $buffer = deKey($buffer, self::$config['common']['ens_key']);
-            logger(LOG_DEBUG, '<-socks ' . Socks5::$stageMap[$conn->stage] . ' 解密后:' . bin2hex(substr($buffer, 0, 20)));
+            logger(LOG_DEBUG, '<-socks ' . Socks5::$stageMap[$conn->context->stage] . ' 解密后:' . bin2hex(substr($buffer, 0, 20)));
         }
-        logger(LOG_DEBUG, "[" . Socks5::$stageMap[$conn->stage] . "]recv<- " . $conn->getRemoteAddress() . ' <-> ' . $conn->getLocalAddress() . ":" . bin2hex(substr($buffer, 0, 40)));
-        switch ($conn->stage) {
+        logger(LOG_DEBUG, "[" . Socks5::$stageMap[$conn->context->stage] . "]recv<- " . $conn->getRemoteAddress() . ' <-> ' . $conn->getLocalAddress() . ":" . bin2hex(substr($buffer, 0, 40)));
+        switch ($conn->context->stage) {
             // 初始化环节  握手请求
             case self::STAGE_INIT:
                 $request = [];
@@ -373,21 +395,21 @@ class Socks5
 
                     Socks5::toSend($conn, self::SOCKS_VER . chr($k));
                     if ($k == 0) {
-                        $conn->stage = self::STAGE_ADDR;
+                        $conn->context->stage = self::STAGE_ADDR;
                     } else {
-                        $conn->stage = self::STAGE_AUTH;
+                        $conn->context->stage = self::STAGE_AUTH;
                     }
-                    $conn->auth_type = $k; //记录客户端的认证方式
+                    $conn->context->auth_type = $k; //记录客户端的认证方式
                     break;
                 }
-                if ($conn->stage != self::STAGE_AUTH) {
+                if ($conn->context->stage != self::STAGE_AUTH) {
                     logger(LOG_ERR, "client has no matched auth methods");
                     logger(LOG_DEBUG, "send:" . bin2hex(self::INIT_ERR) . json_encode($request['methods']));
                     //当代理服务器对于客户端所声明的所有认证方法都不支持, 此时代理服务器将 METHOD 字段值为 0xFF
                     return Socks5::failClose($conn, self::INIT_ERR);
                 }
                 break;
-            // 认证环节  VERSION:1	USERNAME_LENGTH:1	USERNAME:1-255	PASSWORD_LENGTH:1	PASSWORD:1-255
+                // 认证环节  VERSION:1	USERNAME_LENGTH:1	USERNAME:1-255	PASSWORD_LENGTH:1	PASSWORD:1-255
             case self::STAGE_AUTH:
                 $request = [];
                 // 当前偏移量
@@ -398,8 +420,8 @@ class Socks5
                     return Socks5::failClose($conn, self::AUTH_FAIL);
                 }
 
-                // var_dump($conn->auth_type);
-                switch ($conn->auth_type) {
+                // var_dump($conn->context->auth_type);
+                switch ($conn->context->auth_type) {
                     case self::METHOD_USER_PASS:
                         //  子协议 协商 版本
                         $request['sub_ver'] = ord($buffer[$offset]);
@@ -438,7 +460,7 @@ class Socks5
                         if (self::$config['common']["user"] == $request['user'] && self::$config['common']["pass"] == $request['pass']) {
                             logger(LOG_INFO, "auth ok");
                             Socks5::toSend($conn, self::AUTH_OK); //\x01\x00
-                            $conn->stage = STAGE_ADDR;
+                            $conn->context->stage = self::STAGE_ADDR;
                         } else {
                             logger(LOG_INFO, "auth failed");
                             return Socks5::failClose($conn, self::AUTH_FAIL);
@@ -449,20 +471,20 @@ class Socks5
                         return Socks5::failClose($conn, self::AUTH_FAIL);
                 }
                 break;
-            //命令过程 VERSION:1	COMMAND:1	RSV:1	ADDRESS_TYPE:1	DST.ADDR:1-255	DST.PORT:2
-            /**
-             * VERSION SOCKS协议版本，固定0x05
-             * COMMAND 命令
-             * RSV 保留字段
-             * ADDRESS_TYPE 目标服务器地址类型
-             * DST.ADDR ip地址
-             * DST.PORT 端口号
-             *
-             * 说明：这里的DST.ADDR和DST.PORT在COMMAND不同时有不用的表示
-             * CONNECT 希望连接的target服务器ip地址和端口号
-             * BIND 希望连接的target服务器ip地址和端口号
-             * UDP ASSOCIATE 客户端本地使用的ip地址和端口号，代理服务器可以用这个信息对访问进行一些限制。
-             */
+                //命令过程 VERSION:1	COMMAND:1	RSV:1	ADDRESS_TYPE:1	DST.ADDR:1-255	DST.PORT:2
+                /**
+                 * VERSION SOCKS协议版本，固定0x05
+                 * COMMAND 命令
+                 * RSV 保留字段
+                 * ADDRESS_TYPE 目标服务器地址类型
+                 * DST.ADDR ip地址
+                 * DST.PORT 端口号
+                 *
+                 * 说明：这里的DST.ADDR和DST.PORT在COMMAND不同时有不用的表示
+                 * CONNECT 希望连接的target服务器ip地址和端口号
+                 * BIND 希望连接的target服务器ip地址和端口号
+                 * UDP ASSOCIATE 客户端本地使用的ip地址和端口号，代理服务器可以用这个信息对访问进行一些限制。
+                 */
             case self::STAGE_ADDR:
                 $request = [];
                 // 当前偏移量
@@ -506,12 +528,12 @@ class Socks5
                             $request['dest_addr'] = Socks5::getDnsHost($request['dest_addr']);
                         }
                         if ($request['dest_addr']) { //代理
-                            $conn->stage = self::STAGE_CONNECTING;
+                            $conn->context->stage = self::STAGE_CONNECTING;
                             $remote = new AsyncTcpConnection('tcp://' . $request['dest_addr'] . ':' . $request['dest_port']);
                             logger(LOG_DEBUG, 'tcp://' . $request['dest_addr'] . ':' . $request['dest_port'] . ' [初始连接]');
 
                             $remote->onConnect = function (\Workerman\Connection\TcpConnection $remote) use ($conn, $request) {
-                                $conn->state = self::STAGE_STREAM;
+                                $conn->context->stage = self::STAGE_STREAM;
                                 //连接成功，回复的数据包中的 BND.ADDR，BND.PORT 没有太大的意义，象征性的填写Socks 服务端在此次连接中使用的 ADDR 和 PORT 即可。
                                 $bind_addr = '0.0.0.0'; //$remote->getLocalIp(); //'0.0.0.0'
                                 $bind_port = 12345; //$remote->getLocalPort(); //12345
@@ -528,19 +550,17 @@ class Socks5
                         }
                         break;
                     case self::CMD_UDP_ASSOCIATE:
-                        $conn->stage = self::STAGE_UDP_ASSOC;
+                        $conn->context->stage = self::STAGE_UDP_ASSOC;
                         if (self::$config['common']['udp_port'] == 0) {
-
-                            $conn->udpWorker = new \Workerman\Worker('udp://0.0.0.0:0'); //系统自动分配端口
-                            $conn->udpWorker->incId = 0;
-                            $conn->udpWorker->onMessage = function ($udp_connection, $data) use ($conn) {
-                                Socks5::udpWorkerOnMessage($udp_connection, $data, $conn->udpWorker);
+                            $conn->context->udpWorker = new \Workerman\Worker('udp://0.0.0.0:0'); //系统自动分配端口
+                            $conn->context->udpWorker->onMessage = function ($udp_connection, $data) {
+                                Socks5::udpWorkerOnMessage($udp_connection, $data);
                             };
-                            $conn->udpWorker->listen();
-                            $listenInfo = stream_socket_get_name($conn->udpWorker->getMainSocket(), false);
-                            list($bind_addr, $bind_port) = explode(":", $listenInfo);
-                            var_dump($listenInfo);
-                            $bind_port = self::$config['common']['tcp_port'];
+                            $conn->context->udpWorker->listen();
+                            $listenInfo = stream_socket_get_name($conn->context->udpWorker->getMainSocket(), false);
+                            [$bind_addr, $bind_port] = explode(':', $listenInfo);
+                            //var_dump($listenInfo);
+                            //$bind_port = self::$config['common']['tcp_port'];
                         } else {
                             $bind_port = self::$config['common']['udp_port'];
                         }
@@ -565,7 +585,8 @@ class Socks5
         }
     }
 
-    public static function proxyHttp(TcpConnection $conn, string &$data, $decrypt=true){
+    public static function proxyHttp(TcpConnection $conn, string &$data, $decrypt = true)
+    {
         //解密数据
         if ($decrypt && self::$config['common']['ens_key']) {
             logger(LOG_DEBUG, '<-http 解密前:' . bin2hex(substr($data, 0, 20)));
@@ -574,7 +595,7 @@ class Socks5
         }
         // Parse http header.
         $line = strstr($data, "\r", true);
-        list($method, $addr, $http_version) = explode(' ', $line);
+        [$method, $addr, $http_version] = explode(' ', $line);
         logger(LOG_DEBUG, 'http recv:'.$line);
         $url_data = parse_url($addr);
         $addr = isset($url_data['port']) ? $url_data['host'] . ':' . $url_data['port'] : $url_data['host'] . ':80';
@@ -595,7 +616,8 @@ class Socks5
         $remote->connect();
     }
 
-    public static function pipe(TcpConnection $conn, TcpConnection $dest, $ens_key='', $relay_key=''){
+    public static function pipe(TcpConnection $conn, TcpConnection $dest, $ens_key = '', $relay_key = '')
+    {
         $conn->onMessage = function ($conn, $data) use ($dest, $ens_key, $relay_key) {
             //本端有设置密码 解密
             if ($ens_key !== '') {
@@ -635,14 +657,14 @@ class Socks5
     {
         self::toSend($conn, $msg);
         logger(LOG_DEBUG, 'close id[' . $conn->id . ']');
-        $conn->stage = $stage;
+        $conn->context->stage = $stage;
         $conn->close();
         return true;
     }
 
     public static function toSend(\Workerman\Connection\TcpConnection $conn, string $buffer)
     {
-        $type = isset($conn->stage) ? 'socks' : 'http';
+        $type = isset($conn->context->stage) ? 'socks' : 'http';
         if (self::$config['common']['ens_key']) {
             logger(LOG_DEBUG, '->'.$type.' pipe 加密前:' . bin2hex(substr($buffer, 0, 20)));
             $buffer = enKey($buffer, self::$config['common']['ens_key']);
@@ -668,11 +690,10 @@ class Socks5
      * DATA 用户数据
      * @param \Workerman\Connection\UdpConnection $udp_connection
      * @param string $data
-     * @param \Workerman\Worker $worker
      * @return mixed
      * @throws \Exception
      */
-    public static function udpWorkerOnMessage(UdpConnection $udp_connection, string $data, Worker &$worker = null)
+    public static function udpWorkerOnMessage(UdpConnection $udp_connection, string $data)
     {
         //todo test
         logger(LOG_DEBUG, '[udp]' . $udp_connection->getLocalAddress() . ' - ' . $udp_connection->getRemoteAddress() . ' send:' . bin2hex($data));
@@ -695,8 +716,6 @@ class Socks5
             return $udp_connection->close();
         }
 
-        // var_dump($request['dest_addr']);
-        // var_dump($request);
         if ($request['addr_type'] == self::ADDRTYPE_HOST) {
             $request['dest_addr'] = Socks5::getDnsHost($request['dest_addr']);
         }
@@ -705,18 +724,17 @@ class Socks5
             return $udp_connection->close();
         }
         $remote = new AsyncUdpConnection('udp://' . $request['dest_addr'] . ':' . $request['dest_port']);
-        $remote->id = $worker->incId++;
-        $remote->udp_connection = $udp_connection;
         $remote->onConnect = function ($remote) use ($data, $offset) {
             $remote->send(substr($data, $offset));
         };
-        $remote->onMessage = function ($remote, $recv) use ($data, $offset, $udp_connection, $worker) {
+        $remote->onMessage = function ($remote, $recv) use ($data, $offset, $udp_connection) {
             $udp_connection->close(substr($data, 0, $offset) . $recv);
             $remote->close();
-            unset($worker->udpConnections[$remote->id]);
+            unset(self::$udpConnections[spl_object_id($remote)]);
         };
-        $remote->deadTime = time() + 3;
         $remote->connect();
-        $worker->udpConnections[$remote->id] = $remote;
+        //保存udp连接关联
+        self::$udpConnections[spl_object_id($remote)] = [$remote, time() + 3, $udp_connection];
+        return true;
     }
 }

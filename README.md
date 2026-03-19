@@ -7,7 +7,6 @@ Socks5、Http代理
     
     composer require myphps/socks5-http-proxy:dev-master
 
-    
     cp vendor/myphps/socks5-http-proxy/run.example.php run.php
     cp vendor/myphps/socks5-http-proxy/config.example.php config.php
     chmod +x run.php
@@ -17,7 +16,7 @@ Socks5、Http代理
 
     或者
 
-    1. git clone https://github.com/walkor/socks5-http-proxy
+    1. git clone https://github.com/ncwsky/socks5-http-proxy
     2. composer install
     
     修改 config.php配置

@@ -1,0 +1,8 @@
+{
+    "src": "./dist/socks5.phar",
+    "dest": "./build",
+    "ini": "./php.ini",
+    "platform": "all",
+    "php": "8.4",
+    "repository": "ncwsky/php-bin"
+}

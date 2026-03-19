@@ -1,30 +1,25 @@
 #!/usr/bin/env php
 <?php
+
 error_reporting(E_ALL);
 ini_set('display_errors', 'On');// 有些环境关闭了错误显示
 
-if (!defined('RUN_DIR') && realpath(dirname($_SERVER['SCRIPT_FILENAME'])) != __DIR__) {
-    define('RUN_DIR', realpath(dirname($_SERVER['SCRIPT_FILENAME'])));
-}
-defined('RUN_DIR') || define('RUN_DIR', __DIR__);
+$_SERVER['SCRIPT_FILENAME'] = __FILE__; //重置运行
 
-if (!defined('VENDOR_DIR')) {
-    if (is_dir(__DIR__ . '/vendor')) {
-        define('VENDOR_DIR', __DIR__ . '/vendor');
-    } elseif (is_dir(__DIR__ . '/../vendor')) {
-        define('VENDOR_DIR', __DIR__ . '/../vendor');
-    } elseif (is_dir(__DIR__ . '/../../../vendor')) {
-        define('VENDOR_DIR', __DIR__ . '/../../../vendor');
-    }
-}
+require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/vendor/myphps/myphp/GetOpt.php';
 
 defined('PROC_COUNT') || define('PROC_COUNT', 2); //进程数
-defined('STOP_TIMEOUT') || define('STOP_TIMEOUT', 10); //进程结束超时时间 秒
-defined('MAX_INPUT_SIZE') || define('MAX_INPUT_SIZE', 2097152); //接收包限制大小1M 1048576
-
-defined('MY_PHP_DIR') || define('MY_PHP_DIR', VENDOR_DIR . '/myphps/myphp');
-require VENDOR_DIR . '/autoload.php';
-require MY_PHP_DIR . '/GetOpt.php';
+//Phar包路径处理
+if (class_exists(Phar::class, false) && Phar::running(false)) {
+    define('MY_PHAR_PATH', Phar::running()); //Phar内部运行目录
+    define('APP_RUN_DIR', dirname(Phar::running(false))); //Phar的运行目录
+    $_SERVER['SCRIPT_FILENAME'] = Phar::running(false); //重置
+    $inPhar = true;
+} else {
+    define('APP_RUN_DIR', __DIR__);
+    $inPhar = false;
+}
 
 //解析命令参数
 GetOpt::parse('hp:l:u:c:e:r:E:w:', ['help', 'port:', 'listen:','udp:','key:','relay:','relay_key:','wan_ip:']);
@@ -43,7 +38,7 @@ if ($config && file_exists($config)) {
         exit(0);
     }
 } else {
-    $ini = require(file_exists(RUN_DIR . '/config.php') ? RUN_DIR . '/config.php' : __DIR__ . '/config.example.php');
+    $ini = require(file_exists(APP_RUN_DIR . '/config.php') ? APP_RUN_DIR . '/config.php' : __DIR__ . '/config.example.php');
     //处理命令参数
     $tcp_port = (int)GetOpt::val('p', 'port');
     $udp_port = (int)GetOpt::val('u', 'udp');
@@ -52,11 +47,21 @@ if ($config && file_exists($config)) {
     $r_ens_key = GetOpt::val('E', 'relay_key');
     $wan_ip = GetOpt::val('w', 'wan_ip');
 
-    if ($tcp_port) $ini['common']['tcp_port'] = $tcp_port;
-    if ($udp_port) $ini['common']['udp_port'] = $udp_port;
-    if ($ens_key) $ini['common']['ens_key'] = $ens_key;
-    if ($wan_ip) $ini['common']['wan_ip'] = $wan_ip;
-    if ($r_ens_key) $ini['relay']['ens_key'] = $r_ens_key;
+    if ($tcp_port) {
+        $ini['common']['tcp_port'] = $tcp_port;
+    }
+    if ($udp_port) {
+        $ini['common']['udp_port'] = $udp_port;
+    }
+    if ($ens_key) {
+        $ini['common']['ens_key'] = $ens_key;
+    }
+    if ($wan_ip) {
+        $ini['common']['wan_ip'] = $wan_ip;
+    }
+    if ($r_ens_key) {
+        $ini['relay']['ens_key'] = $r_ens_key;
+    }
 }
 
 if (empty($ini['common']['wan_ip'])) {
@@ -108,20 +113,20 @@ $conf = [
     'type' => 'tcp',
     'setting' => [
         'count' => PROC_COUNT, //单进程模式
-        'stdoutFile' => RUN_DIR . '/log.log', //终端输出
-        'pidFile' => RUN_DIR . '/socks'.$port.'.pid',  //pid_file
-        'logFile' => RUN_DIR . '/log.log', //日志文件 log_file
+        'stdoutFile' => APP_RUN_DIR . '/log.log', //终端输出
+        'pidFile' => APP_RUN_DIR . '/socks'.$port.'.pid',  //pid_file
+        'logFile' => APP_RUN_DIR . '/log.log', //日志文件 log_file
     ],
     'event' => [
-        'onWorkerStart' => function (Workerman\Worker $worker) use($ini) {
+        'onWorkerStart' => function (Workerman\Worker $worker) use ($ini) {
             \common\Socks5::init($ini);
         },
         'onConnect' => function (Workerman\Connection\TcpConnection $conn) {
             logger(LOG_DEBUG, 'tcp conn:' . $conn->id);
             \common\Socks5::connect($conn);
         },
-        'onClose' => function (Workerman\Connection\TcpConnection $conn){
-            \SrvBase::$isConsole && SrvBase::safeEcho(date("Y-m-d H:i:s.").substr(microtime(),2, 5).' onClose '.$conn->id.PHP_EOL);
+        'onClose' => function (Workerman\Connection\TcpConnection $conn) {
+            \SrvBase::$isConsole && SrvBase::safeEcho(date("Y-m-d H:i:s.").substr(microtime(), 2, 5).' onClose '.$conn->id.PHP_EOL);
         },
         'onMessage' => function (Workerman\Connection\TcpConnection $conn, $data) {
             \common\Socks5::handle($conn, $data);
@@ -129,43 +134,28 @@ $conf = [
     ],
     'listen' => [
         'udp' => [
-            'type'=>'udp',
+            'type' => 'udp',
             'ip' => $listen,
             'port' => $udp_port,
             'setting' => [
                 'count' => PROC_COUNT,
             ],
             'event' => [
-                'onWorkerStart' => function (Workerman\Worker $worker) use($ini) {
-                    \common\Socks5::init($ini);
-                    $worker->udpConnections = [];
-                    \Workerman\Timer::add(1, function () use ($worker) {
-                        foreach ($worker->udpConnections as $id => $remote_connection) {
-                            if ($remote_connection->deadTime < time()) {
-                                $remote_connection->close();
-                                $remote_connection->udp_connection->close();
-                                unset($worker->udpConnections[$id]);
-                            }
-                        }
-                    });
+                'onWorkerStart' => function (Workerman\Worker $worker) use ($ini) {
+                    \common\Socks5::init($ini, true);
                 },
                 'onConnect' => function (Workerman\Connection\TcpConnection $conn) {
                     logger(LOG_DEBUG, 'udp conn:'.$conn->id);
                 },
                 'onMessage' => function (Workerman\Connection\UdpConnection $connection, $data) {
-                    \common\Socks5::udpWorkerOnMessage($connection, $data, SrvBase::$instance->server);
+                    \common\Socks5::udpWorkerOnMessage($connection, $data);
                 },
             ]
         ],
     ],
     // 进程内加载的文件
     'worker_load' => [
-        MY_PHP_DIR . '/base.php',
-        function () {
-            if (__DIR__ != RUN_DIR) {
-                myphp::class_dir(__DIR__ . '/common');
-            }
-        }
+        __DIR__ . '/vendor/myphps/myphp/base.php'
     ],
 ];
 
@@ -175,26 +165,28 @@ if ($ini['common']['ens_key']) {
     $conf['listen']['udp']['setting']['protocol'] = '\\Workerman\\Protocols\\Frame';
 }
 // 设置每个连接接收的最大数据包
-\Workerman\Connection\TcpConnection::$defaultMaxPackageSize = MAX_INPUT_SIZE;
+\Workerman\Connection\TcpConnection::$defaultMaxPackageSize = 10 * 1024 * 1024;
 $srv = new WorkerManSrv($conf);
-Worker2::$stopTimeout = STOP_TIMEOUT; //强制进程结束等待时间
+Worker2::$stopTimeout = 10; //强制进程结束等待时间
 $srv->run($argv);
 
 function logger($level, $str)
 {
     global $ini;
-    if ($ini['common']['debug'] || $level!=LOG_DEBUG) {
+    if ($ini['common']['debug'] || $level != LOG_DEBUG) {
         SrvBase::safeEcho(date("Y-m-d H:i:s.") . substr(microtime(), 2, 5) . ' ' . $str . PHP_EOL);
     }
 }
 
-function enKey(&$data, $key){
+function enKey(&$data, $key)
+{
     $data = \myphp\Helper::aesEncrypt($data, $key);
     #$data = xor_enc($data, $key);//"\x6a\x6d".$data; //test
     #$data = "\x6a\x6d".$data; //test
     return $data;
 }
-function deKey(&$data, $key){
+function deKey(&$data, $key)
+{
     $data = \myphp\Helper::aesDecrypt($data, $key);
     #$data = xor_enc($data, $key);//substr($data,2); //test
     #$data = substr($data,2); //test

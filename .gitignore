@@ -5,3 +5,4 @@
 /log.log
 /*.pid
 /*.lock
+/.php-cs-fixer.cache
