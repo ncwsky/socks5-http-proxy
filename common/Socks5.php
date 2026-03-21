@@ -105,8 +105,7 @@ class Socks5
         ],
         'relay' => [ //中继
             'endpoint' => '', // http[s]://xxx, ws://xxx, tcp://xxx
-            'gzip_min' => 1024, //1k
-            'gzip_level' => 0, // 0-9 0不压缩 建议5
+            'gzip' => 0, // 1启用gzip压缩传输
             'ens_key' => '', // 加密key
         ]
     ];
@@ -283,8 +282,10 @@ class Socks5
                 $conn->resumeRecv(); //连接建立 恢复接收
             };
 
-            self::pipe($conn, $relay, self::$config['common']['ens_key'], self::$config['relay']['ens_key']);
-            self::pipe($relay, $conn, self::$config['relay']['ens_key'], self::$config['common']['ens_key']);
+            $gzip = !empty(self::$config['relay']['gzip']) ? 1 : 0;
+            // 客户端→relay: 压缩后发送(gzip=1)，relay→客户端: 接收后解压(gzip=-1)
+            self::pipe($conn, $relay, self::$config['common']['ens_key'], self::$config['relay']['ens_key'], $gzip);
+            self::pipe($relay, $conn, self::$config['relay']['ens_key'], self::$config['common']['ens_key'], $gzip ? -1 : 0);
 
             $relay->onError = function (TcpConnection $relay, $err_code, $err_msg) use ($conn) {
                 logger(LOG_DEBUG, "relay connect fail:".$conn->id.', ' . $err_code . ", " . $err_msg);
@@ -311,6 +312,16 @@ class Socks5
             logger(LOG_DEBUG, '<- 解密前:' . bin2hex(substr($data, 0, 20)));
             $data = deKey($data, self::$config['common']['ens_key']);
             logger(LOG_DEBUG, '<- 解密后:' . bin2hex(substr($data, 0, 20)));
+        }
+        // relay端接收解压（对端启用了gzip压缩时）
+        if (!empty(self::$config['relay']['gzip']) && strlen($data) > 0) {
+            $data = @gzuncompress($data);
+            if ($data === false) {
+                logger(LOG_ERR, 'handle gzip decompress failed');
+                $conn->close();
+                return;
+            }
+            logger(LOG_DEBUG, 'handle gzip decompress ok, size:' . strlen($data));
         }
         logger(LOG_DEBUG, "recv<- " . $conn->getRemoteAddress() . ' <-> ' . $conn->getLocalAddress() . ":" . bin2hex(substr($data, 0, 40)));
         //第一次收到数据时判断请求类型 http|socks5
@@ -645,8 +656,10 @@ class Socks5
                                 Socks5::failClose($conn, Socks5::packResponse(self::REP_NETWORK));
                             };
 
-                            self::pipe($conn, $remote, self::$config['common']['ens_key']);
-                            self::pipe($remote, $conn, '', self::$config['common']['ens_key']);
+                            $gzip = !empty(self::$config['relay']['gzip']) ? 1 : 0;
+                            // 客户端→目标: 解密+解压; 目标→客户端: 压缩+加密
+                            self::pipe($conn, $remote, self::$config['common']['ens_key'], '', $gzip ? -1 : 0);
+                            self::pipe($remote, $conn, '', self::$config['common']['ens_key'], $gzip);
                             $remote->connect();
                         } else {
                             logger(LOG_NOTICE, 'DNS resolve failed. ' . $dest_addr);
@@ -740,15 +753,23 @@ class Socks5
             $conn->close();
         };
 
-        self::pipe($conn, $remote, self::$config['common']['ens_key']);
-        self::pipe($remote, $conn, '', self::$config['common']['ens_key']);
+        $gzip = !empty(self::$config['relay']['gzip']) ? 1 : 0;
+        // 客户端→目标: 解密+解压; 目标→客户端: 压缩+加密
+        self::pipe($conn, $remote, self::$config['common']['ens_key'], '', $gzip ? -1 : 0);
+        self::pipe($remote, $conn, '', self::$config['common']['ens_key'], $gzip);
 
         $remote->connect();
     }
 
-    public static function pipe(TcpConnection $conn, TcpConnection $dest, $ens_key = '', $relay_key = '')
+    /**
+     * 数据管道转发
+     * @param string $ens_key 本端解密key（接收时解密）
+     * @param string $relay_key 远端加密key（发送时加密）
+     * @param int $gzip 压缩方向: 0=不压缩, 1=发送时压缩, -1=接收时解压
+     */
+    public static function pipe(TcpConnection $conn, TcpConnection $dest, $ens_key = '', $relay_key = '', int $gzip = 0)
     {
-        $conn->onMessage = function ($conn, $data) use ($dest, $ens_key, $relay_key) {
+        $conn->onMessage = function ($conn, $data) use ($dest, $ens_key, $relay_key, $gzip) {
             //本端有设置密码 解密
             if ($ens_key !== '') {
                 logger(LOG_DEBUG, '<-pipe 解密前:' . $conn->getLocalAddress() . ' - ' . $conn->getRemoteAddress());
@@ -759,6 +780,25 @@ class Socks5
                 logger(LOG_DEBUG, '<-pipe 无解密:' . $conn->getLocalAddress() . ' - ' . $conn->getRemoteAddress());
                 logger(LOG_DEBUG, '<-pipe 无解密:' . bin2hex(substr($data, 0, 20)));
             }
+
+            // 接收时解压（从relay端收到的数据）
+            if ($gzip === -1 && strlen($data) > 0) {
+                $data = @gzuncompress($data);
+                if ($data === false) {
+                    logger(LOG_ERR, 'pipe gzip decompress failed');
+                    $conn->close();
+                    return;
+                }
+                logger(LOG_DEBUG, 'gzip decompress ok, size:' . strlen($data));
+            }
+
+            // 发送时压缩（发往relay端的数据）
+            if ($gzip === 1) {
+                $compressed = gzcompress($data);
+                logger(LOG_DEBUG, 'gzip compress ' . strlen($data) . ' -> ' . strlen($compressed));
+                $data = $compressed;
+            }
+
             //远端有设置密码 加密
             if ($relay_key !== '') {
                 logger(LOG_DEBUG, '->pipe 加密前:' . $dest->getLocalAddress() . ' - ' . $dest->getRemoteAddress());
@@ -795,6 +835,11 @@ class Socks5
     public static function toSend(\Workerman\Connection\TcpConnection $conn, string $buffer)
     {
         $type = isset($conn->context->stage) ? 'socks' : 'http';
+        // relay端响应压缩
+        if (!empty(self::$config['relay']['gzip'])) {
+            $buffer = gzcompress($buffer);
+            logger(LOG_DEBUG, '->'.$type.' gzip compress, size:' . strlen($buffer));
+        }
         if (self::$config['common']['ens_key']) {
             logger(LOG_DEBUG, '->'.$type.' pipe 加密前:' . bin2hex(substr($buffer, 0, 20)));
             $buffer = enKey($buffer, self::$config['common']['ens_key']);
