@@ -22,10 +22,10 @@ if (class_exists(Phar::class, false) && Phar::running(false)) {
 }
 
 //解析命令参数
-GetOpt::parse('hp:l:u:c:e:r:E:w:', ['help', 'port:', 'listen:','udp:','key:','relay:','relay_key:','wan_ip:']);
+GetOpt::parse('hp:l:u:c:e:r:E:w:', ['help', 'port:', 'listen:','udp:','config:','key:','relay:','relay_key:','wan_ip:']);
 
 //解析配置文件
-$config = GetOpt::val('c'); // config.ini|xx.php
+$config = GetOpt::val('c', 'config', 'config.ini'); // config.ini|xx.php
 if ($config && file_exists($config)) {
     if (strpos($config, '.php')) {
         $ini = require($config);
@@ -103,7 +103,7 @@ if (GetOpt::has('h', 'help')) {
    or: socks5.php OPTION [restart|reload|stop]
 
    --help
-   -c 配置文件     优先使用配置文件
+   -c --config    配置文件     优先使用配置文件
    -l --listen    监听地址(默认0.0.0.0)
    -p --port      tcp 端口
    -u --udp       udp 端口
