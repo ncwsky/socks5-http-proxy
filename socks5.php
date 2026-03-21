@@ -46,6 +46,7 @@ if ($config && file_exists($config)) {
     $relay = GetOpt::val('r', 'relay');
     $r_ens_key = GetOpt::val('E', 'relay_key');
     $wan_ip = GetOpt::val('w', 'wan_ip');
+    $listen_addr = GetOpt::val('l', 'listen');
 
     if ($tcp_port) {
         $ini['common']['tcp_port'] = $tcp_port;
@@ -61,6 +62,12 @@ if ($config && file_exists($config)) {
     }
     if ($r_ens_key) {
         $ini['relay']['ens_key'] = $r_ens_key;
+    }
+    if ($relay) {
+        $ini['relay']['endpoint'] = $relay;
+    }
+    if ($listen_addr) {
+        $ini['common']['listen'] = $listen_addr;
     }
 }
 
@@ -96,7 +103,8 @@ if (GetOpt::has('h', 'help')) {
    or: socks5.php OPTION [restart|reload|stop]
 
    --help
-   -c 配置文件     优先使用配置文件 
+   -c 配置文件     优先使用配置文件
+   -l --listen    监听地址(默认0.0.0.0)
    -p --port      tcp 端口
    -u --udp       udp 端口
    -e --key       加密key
@@ -126,6 +134,11 @@ $conf = [
             \common\Socks5::connect($conn);
         },
         'onClose' => function (Workerman\Connection\TcpConnection $conn) {
+            // 清理动态创建的UDP Worker（UDP ASSOCIATE时创建）
+            if (isset($conn->context->udpWorker)) {
+                $conn->context->udpWorker->unlisten();
+                $conn->context->udpWorker = null;
+            }
             \SrvBase::$isConsole && SrvBase::safeEcho(date("Y-m-d H:i:s.").substr(microtime(), 2, 5).' onClose '.$conn->id.PHP_EOL);
         },
         'onMessage' => function (Workerman\Connection\TcpConnection $conn, $data) {
@@ -173,7 +186,7 @@ $srv->run($argv);
 function logger($level, $str)
 {
     global $ini;
-    if ($ini['common']['debug'] || $level != LOG_DEBUG) {
+    if (!empty($ini['common']['debug']) || $level !== LOG_DEBUG) {
         SrvBase::safeEcho(date("Y-m-d H:i:s.") . substr(microtime(), 2, 5) . ' ' . $str . PHP_EOL);
     }
 }

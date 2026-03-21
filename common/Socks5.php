@@ -114,8 +114,8 @@ class Socks5
     public static function init(array $config, $udp = false)
     {
         if ($config) {
-            self::$config = array_merge(self::$config, $config);
-            if (!empty(self::$config['common']['auth']) && !empty($config['common']['user']) && !empty($config['common']['pass'])) {
+            self::$config = array_replace_recursive(self::$config, $config);
+            if (!empty(self::$config['common']['auth']) && !empty(self::$config['common']['user']) && !empty(self::$config['common']['pass'])) {
                 self::$config['common']['auth'] = true;
             } else {
                 self::$config['common']['auth'] = false;
@@ -123,14 +123,14 @@ class Socks5
         }
         //远端端口
         self::$config['relay']['port'] = 0;
-        if (!empty($config['relay']['endpoint'])) {
+        if (!empty(self::$config['relay']['endpoint'])) {
             self::$config['relay']['port'] = (int)substr(strrchr(self::$config['relay']['endpoint'], ':'), 1);
         }
-        if (empty($config['common']['ens_key'])) {
-            $config['common']['ens_key'] = '';
+        if (empty(self::$config['common']['ens_key'])) {
+            self::$config['common']['ens_key'] = '';
         }
-        if (empty($config['relay']['ens_key'])) {
-            $config['relay']['ens_key'] = '';
+        if (empty(self::$config['relay']['ens_key'])) {
+            self::$config['relay']['ens_key'] = '';
         }
 
         if ($udp) { //udp初始定时清理连接
@@ -215,7 +215,7 @@ class Socks5
         //DestAddr
         switch ($addr_type) {
             case self::ADDRTYPE_IPV4:
-                if (strlen($buffer) < 4 + 4) {
+                if (strlen($buffer) < $offset + 4) { //4+4
                     logger(LOG_ERR, "connect init failed.[ADDRTYPE_IPV4] buffer too short.");
                     return false;
                 }
@@ -233,7 +233,7 @@ class Socks5
                 $request['host_len'] = ord($buffer[$offset]);
                 $offset += 1;
 
-                if (strlen($buffer) < 4 + 1 + $request['host_len']) {
+                if (strlen($buffer) < $offset + $request['host_len']) { // 4+1+$request['host_len']
                     logger(LOG_ERR, "connect init failed.[ADDRTYPE_HOST] buffer too short.");
                     return false;
                 }
@@ -243,11 +243,11 @@ class Socks5
                 break;
 
             case self::ADDRTYPE_IPV6:
-                if (strlen($buffer) < 4 + 16) {  //22?
+                if (strlen($buffer) < $offset + 16) { // 4+16 22?
                     logger(LOG_ERR, "connect init failed.[ADDRTYPE_IPV6] buffer too short.");
                     return false;
                 }
-                $request['dest_addr'] = substr($buffer, $offset, 16);
+                $request['dest_addr'] = inet_ntop(substr($buffer, $offset, 16));
                 $offset += 16;
                 break;
             default:
@@ -303,6 +303,9 @@ class Socks5
 
     public static function handle(TcpConnection $conn, string &$data)
     {
+        if ($data === '') {
+            return;
+        }
         //解密数据
         if (self::$config['common']['ens_key']) {
             logger(LOG_DEBUG, '<- 解密前:' . bin2hex(substr($data, 0, 20)));
@@ -314,19 +317,115 @@ class Socks5
         if (!$conn->context->hasRecvData) {
             $conn->context->hasRecvData = true;
 
-            if (substr($data, 0, 4) === 'CONN') {
-                // http
-            } else {
-                //socks
+            $ver_flag = ord($data[0]);
+            if ($ver_flag === 0x05) {
+                //socks5 协议版本号为0x05
                 $conn->context->stage = self::STAGE_INIT;
                 $conn->context->auth_type = null;
+            } elseif ($ver_flag === 0x04) {
+                //socks4 协议，直接处理并return
+                self::proxySocks4($conn, $data);
+                return;
             }
+            // 否则视为http代理请求
         }
 
         if (isset($conn->context->stage)) {
             self::proxySocks($conn, $data, false);
         } else {
             self::proxyHttp($conn, $data, false);
+        }
+    }
+
+    /**
+     * SOCKS4/4a 协议处理
+     * 请求格式: VER(1) CMD(1) DSTPORT(2) DSTIP(4) USERID(变长,null结尾) [DOMAIN(变长,null结尾,仅4a)]
+     * 响应格式: VN(0x00) REP(1) DSTPORT(2) DSTIP(4)
+     */
+    public static function proxySocks4(TcpConnection $conn, string &$buffer)
+    {
+        if (strlen($buffer) < 9) {
+            logger(LOG_ERR, "socks4 request too short: " . bin2hex($buffer));
+            $conn->close();
+            return;
+        }
+
+        $cmd = ord($buffer[1]);
+        $portData = unpack("n", substr($buffer, 2, 2));
+        $dest_port = $portData[1];
+        $ip_bytes = substr($buffer, 4, 4);
+        $dest_ip = ord($ip_bytes[0]) . '.' . ord($ip_bytes[1]) . '.' . ord($ip_bytes[2]) . '.' . ord($ip_bytes[3]);
+
+        // 跳过 USERID（null结尾）
+        $userid_end = strpos($buffer, "\x00", 8);
+        if ($userid_end === false) {
+            logger(LOG_ERR, "socks4 missing null terminator for userid");
+            $conn->close();
+            return;
+        }
+
+        // SOCKS4a: 当IP为 0.0.0.x (x>0) 时，USERID后面跟域名
+        if (ord($ip_bytes[0]) === 0 && ord($ip_bytes[1]) === 0 && ord($ip_bytes[2]) === 0 && ord($ip_bytes[3]) > 0) {
+            $domain_start = $userid_end + 1;
+            $domain_end = strpos($buffer, "\x00", $domain_start);
+            if ($domain_end === false) {
+                logger(LOG_ERR, "socks4a missing null terminator for domain");
+                $conn->close();
+                return;
+            }
+            $dest_addr = substr($buffer, $domain_start, $domain_end - $domain_start);
+            logger(LOG_INFO, "socks4a CONNECT {$dest_addr}:{$dest_port}");
+            // DNS解析
+            $dest_ip = self::getDnsHost($dest_addr);
+            if (!$dest_ip) {
+                logger(LOG_ERR, "socks4a DNS resolve failed: {$dest_addr}");
+                self::socks4Response($conn, 0x5B);
+                return;
+            }
+        } else {
+            $dest_addr = $dest_ip;
+            logger(LOG_INFO, "socks4 CONNECT {$dest_ip}:{$dest_port}");
+        }
+
+        if ($cmd !== 0x01) { // 仅支持 CONNECT
+            logger(LOG_ERR, "socks4 unsupported cmd: 0x" . dechex($cmd));
+            self::socks4Response($conn, 0x5B);
+            return;
+        }
+
+        // 建立到目标的异步连接
+        $remote = new AsyncTcpConnection("tcp://{$dest_ip}:{$dest_port}");
+
+        $remote->onConnect = function (TcpConnection $remote) use ($conn, $dest_ip, $dest_port) {
+            logger(LOG_DEBUG, "socks4 tcp://{$dest_ip}:{$dest_port} [连接OK]");
+            self::socks4Response($conn, 0x5A, $dest_port, $dest_ip);
+        };
+
+        $remote->onError = function ($remote, $err_code, $err_msg) use ($conn, $dest_ip, $dest_port) {
+            logger(LOG_ERR, "socks4 tcp://{$dest_ip}:{$dest_port} connect fail: {$err_code} {$err_msg}, from: " . $conn->getRemoteAddress());
+            self::socks4Response($conn, 0x5B);
+        };
+
+        self::pipe($conn, $remote, self::$config['common']['ens_key']);
+        self::pipe($remote, $conn, '', self::$config['common']['ens_key']);
+        $remote->connect();
+    }
+
+    /**
+     * SOCKS4 响应: VN(0x00) REP(1) DSTPORT(2) DSTIP(4)
+     * REP: 0x5A=成功, 0x5B=失败
+     */
+    private static function socks4Response(TcpConnection $conn, int $rep, int $port = 0, string $ip = '0.0.0.0')
+    {
+        $response = "\x00" . chr($rep) . pack("n", $port);
+        $parts = explode('.', $ip);
+        foreach ($parts as $block) {
+            $response .= chr((int)$block);
+        }
+        logger(LOG_DEBUG, "socks4 response: " . bin2hex($response));
+        self::toSend($conn, $response);
+        if ($rep !== 0x5A) {
+            $conn->close();
         }
     }
 
@@ -394,7 +493,7 @@ class Socks5
                     logger(LOG_DEBUG, "send:" . bin2hex(self::SOCKS_VER . chr($k)));
 
                     Socks5::toSend($conn, self::SOCKS_VER . chr($k));
-                    if ($k == 0) {
+                    if ($k === self::METHOD_NO_AUTH) {
                         $conn->context->stage = self::STAGE_ADDR;
                     } else {
                         $conn->context->stage = self::STAGE_AUTH;
@@ -402,9 +501,9 @@ class Socks5
                     $conn->context->auth_type = $k; //记录客户端的认证方式
                     break;
                 }
-                if ($conn->context->stage != self::STAGE_AUTH) {
+                if ($conn->context->stage !== self::STAGE_AUTH) {
                     logger(LOG_ERR, "client has no matched auth methods");
-                    logger(LOG_DEBUG, "send:" . bin2hex(self::INIT_ERR) . json_encode($request['methods']));
+                    logger(LOG_ERR, "send:" . bin2hex(self::INIT_ERR) . ', stage:' . $conn->context->stage . json_encode($request['methods']));
                     //当代理服务器对于客户端所声明的所有认证方法都不支持, 此时代理服务器将 METHOD 字段值为 0xFF
                     return Socks5::failClose($conn, self::INIT_ERR);
                 }
@@ -541,6 +640,11 @@ class Socks5
                                 logger(LOG_DEBUG, 'tcp://' . $request['dest_addr'] . ':' . $request['dest_port'] . ' [连接OK]');
                             };
 
+                            $remote->onError = function ($remote, $err_code, $err_msg) use ($conn, $request) {
+                                logger(LOG_ERR, 'tcp://' . $request['dest_addr'] . ':' . $request['dest_port'] . " socks5 connect fail: {$err_code} {$err_msg}, from: " . $conn->getRemoteAddress());
+                                Socks5::failClose($conn, Socks5::packResponse(self::REP_NETWORK));
+                            };
+
                             self::pipe($conn, $remote, self::$config['common']['ens_key']);
                             self::pipe($remote, $conn, '', self::$config['common']['ens_key']);
                             $remote->connect();
@@ -595,20 +699,46 @@ class Socks5
         }
         // Parse http header.
         $line = strstr($data, "\r", true);
-        [$method, $addr, $http_version] = explode(' ', $line);
+        if (!$line) {
+            logger(LOG_ERR, 'http invalid request, no CRLF '. $data);
+            $conn->close();
+            return;
+        }
+        $parts = explode(' ', $line);
+        if (count($parts) < 3) {
+            logger(LOG_ERR, 'http invalid request line: ' . $line.' --- '.$data);
+            $conn->close();
+            return;
+        }
+        [$method, $addr, $http_version] = $parts;
         logger(LOG_DEBUG, 'http recv:'.$line);
         $url_data = parse_url($addr);
+        if (empty($url_data['host'])) {
+            logger(LOG_ERR, 'http invalid host: ' . $addr);
+            $conn->close();
+            return;
+        }
         $addr = isset($url_data['port']) ? $url_data['host'] . ':' . $url_data['port'] : $url_data['host'] . ':80';
         // Async TCP connection.
         $remote = new \Workerman\Connection\AsyncTcpConnection("tcp://$addr");
-        // CONNECT.
-        if ($method !== 'CONNECT') {
-            $remote->send($data);
-            // POST GET PUT DELETE etc.
+
+        if ($method === 'CONNECT') {
+            // CONNECT隧道：必须等远程连接建立后再回复200
+            $remote->onConnect = function ($remote) use ($conn, $http_version) {
+                self::toSend($conn, $http_version . " 200 Connection Established\r\n\r\n");
+            };
         } else {
-            self::toSend($conn, $http_version." 200 Connection Established\r\n\r\n");
-            //$conn->send($http_version." 200 Connection Established\r\n\r\n");
+            // GET/POST等：直接转发原始请求
+            $remote->send($data);
         }
+
+        $remote->onError = function ($remote, $err_code, $err_msg) use ($conn, $method, $http_version) {
+            logger(LOG_ERR, "http remote connect fail: {$err_code} {$err_msg}, from: " . $conn->getRemoteAddress());
+            if ($method === 'CONNECT') {
+                self::toSend($conn, $http_version . " 502 Bad Gateway\r\n\r\n");
+            }
+            $conn->close();
+        };
 
         self::pipe($conn, $remote, self::$config['common']['ens_key']);
         self::pipe($remote, $conn, '', self::$config['common']['ens_key']);
