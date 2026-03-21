@@ -25,3 +25,5 @@ Socks5、Http代理
 ### HELP
     ./socks5.php -h
 
+phpacker build --php=8.2
+

@@ -6,3 +6,5 @@
 /*.pid
 /*.lock
 /.php-cs-fixer.cache
+/dist
+/build

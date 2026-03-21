@@ -3,6 +3,6 @@
     "dest": "./build",
     "ini": "./php.ini",
     "platform": "all",
-    "php": "8.4",
+    "php": "8.2",
     "repository": "ncwsky/php-bin"
 }

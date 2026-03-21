@@ -113,6 +113,12 @@ if (GetOpt::has('h', 'help')) {
    -w --wan_ip    接入网络IP', PHP_EOL;
     exit(0);
 }
+//提前创建目录防止多进程冲突
+if (!is_dir(APP_RUN_DIR . '/log')) {
+    mkdir(APP_RUN_DIR . '/log', 0755);
+}
+//临时目录
+const RUNTIME = APP_RUN_DIR . '/runtime';
 
 $conf = [
     'name' => 'mySocks5',
@@ -173,10 +179,11 @@ $conf = [
 ];
 
 //如果加密使用定长包
-if ($ini['common']['ens_key']) {
+if (!empty($ini['common']['ens_key'])) {
     $conf['setting']['protocol'] = '\\Workerman\\Protocols\\Frame';
     $conf['listen']['udp']['setting']['protocol'] = '\\Workerman\\Protocols\\Frame';
 }
+
 // 设置每个连接接收的最大数据包
 \Workerman\Connection\TcpConnection::$defaultMaxPackageSize = 10 * 1024 * 1024;
 $srv = new WorkerManSrv($conf);

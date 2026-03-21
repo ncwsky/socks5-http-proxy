@@ -49,9 +49,6 @@ function cliRun($a, $params)
  */
 function cliPhar(string $sigName = 'sha256', string $private_key_file = '')
 {
-    if (!is_dir(__DIR__ . '/dist/web')) {
-        mkdir(__DIR__ . '/dist/web', 0755, true);
-    }
     $pharFile = __DIR__ . '/dist/socks5.phar';
     if (file_exists($pharFile)) {
         unlink($pharFile);
@@ -86,6 +83,9 @@ function cliPhar(string $sigName = 'sha256', string $private_key_file = '')
         '.php-cs-fixer.cache',
         '.php-cs-fixer.dist.php',
         'config.ini',
+        'cli.php',
+        'test_proxy.php',
+        'run.example.php',
         'php.ini',
         'phpacker.json',
         'phpstan.neon.dist',

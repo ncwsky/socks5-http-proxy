@@ -97,7 +97,6 @@ class Socks5
             'user' => 'user',
             'pass' => 'pass',
             'ens_key' => '', //数据加密key  rc4
-            "log_level" => LOG_DEBUG,
             "tcp_port" => 1081,
             "http_port" => 1082, //http_port不指定时使用tcp_port+1
             "udp_port" => 0, //设置为0 表示由系统动态分配
@@ -500,7 +499,7 @@ class Socks5
                 //仅支持 无验证和账号密码验证  不支持GSSAPI
                 $k = self::$config['common']['auth'] ? self::METHOD_USER_PASS : self::METHOD_NO_AUTH;
                 if (in_array($k, $request['methods'])) {
-                    logger(LOG_INFO, "auth client " . Socks5::$methodMap[$k]);
+                    logger(LOG_DEBUG, "auth client " . Socks5::$methodMap[$k]);
                     logger(LOG_DEBUG, "send:" . bin2hex(self::SOCKS_VER . chr($k)));
 
                     Socks5::toSend($conn, self::SOCKS_VER . chr($k));

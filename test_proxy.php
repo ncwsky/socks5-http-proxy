@@ -474,7 +474,6 @@ test('array_replace_recursive 保留默认值', function () {
             'user' => 'user',
             'pass' => 'pass',
             'ens_key' => '',
-            'log_level' => LOG_DEBUG,
             'tcp_port' => 1081,
             'http_port' => 1082,
             'udp_port' => 0,
