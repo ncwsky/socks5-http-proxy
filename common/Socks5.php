@@ -669,27 +669,24 @@ class Socks5
                     case self::CMD_UDP_ASSOCIATE:
                         $conn->context->stage = self::STAGE_UDP_ASSOC;
                         if (self::$config['common']['udp_port'] == 0) {
-                            $conn->context->udpWorker = new \Workerman\Worker('udp://0.0.0.0:0'); //系统自动分配端口
+                            // 动态分配UDP端口
+                            $conn->context->udpWorker = new \Workerman\Worker('udp://0.0.0.0:0');
                             $conn->context->udpWorker->onMessage = function ($udp_connection, $data) {
                                 Socks5::udpWorkerOnMessage($udp_connection, $data);
                             };
                             $conn->context->udpWorker->listen();
                             $listenInfo = stream_socket_get_name($conn->context->udpWorker->getMainSocket(), false);
-                            [$bind_addr, $bind_port] = explode(':', $listenInfo);
-                            //var_dump($listenInfo);
-                            //$bind_port = self::$config['common']['tcp_port'];
+                            $bind_port = (int)substr(strrchr($listenInfo, ':'), 1);
                         } else {
+                            // 使用全局UDP Worker端口
                             $bind_port = self::$config['common']['udp_port'];
                         }
-                        //todo 测试udp
-                        $listenInfo = stream_socket_get_name($conn->worker->getMainSocket(), false);
-                        if (empty(self::$config['common']['wan_ip'])) { //未匹配时 直接使用本地ip 可能不支持公网穿透
-                            $bind_addr = $conn->getLocalIp();
-                        } else {
-                            $bind_addr = self::$config['common']['wan_ip'];  //对外ip
-                        }
+                        // 确定对外绑定地址 未匹配时 直接使用本地ip 可能不支持公网穿透
+                        $bind_addr = !empty(self::$config['common']['wan_ip'])
+                            ? self::$config['common']['wan_ip']
+                            : $conn->getLocalIp();
 
-                        logger(LOG_DEBUG, "CMD_UDP_ASSOCIATE " . self::$config['common']['udp_port'] . ', main:' . $listenInfo . ', local:' . $conn->getLocalAddress() . ', remote:' . $conn->getRemoteAddress() . ', bind:' . $bind_addr . ':' . $bind_port);
+                        logger(LOG_DEBUG, "CMD_UDP_ASSOCIATE bind:{$bind_addr}:{$bind_port}, local:" . $conn->getLocalAddress() . ', remote:' . $conn->getRemoteAddress());
                         Socks5::toSend($conn, Socks5::packResponse(self::REP_OK, 0, self::ADDRTYPE_IPV4, $bind_addr, $bind_port));
                         break;
                     case self::CMD_BIND:
@@ -870,8 +867,14 @@ class Socks5
      */
     public static function udpWorkerOnMessage(UdpConnection $udp_connection, string $data)
     {
-        //todo test
-        logger(LOG_DEBUG, '[udp]' . $udp_connection->getLocalAddress() . ' - ' . $udp_connection->getRemoteAddress() . ' send:' . bin2hex($data));
+        logger(LOG_DEBUG, '[udp]' . $udp_connection->getLocalAddress() . ' - ' . $udp_connection->getRemoteAddress() . ' recv:' . bin2hex(substr($data, 0, 40)));
+
+        // 最小长度校验: RSV(2) + FRAG(1) + ATYP(1) = 4字节 + 至少地址和端口
+        if (strlen($data) < 10) {
+            logger(LOG_ERR, '[udp] packet too short: ' . strlen($data));
+            return;
+        }
+
         $request = [];
         $offset = 0;
 
@@ -881,35 +884,56 @@ class Socks5
         $request['frag'] = ord($data[$offset]);
         $offset += 1;
 
+        // 分片包暂不支持重组，丢弃非首片
+        if ($request['frag'] !== 0) {
+            logger(LOG_DEBUG, '[udp] fragmented packet dropped, frag=' . $request['frag']);
+            return;
+        }
+
         $request['addr_type'] = ord($data[$offset]);
         $offset += 1;
 
         // DestAddr  DestPort
         $ok = Socks5::parseAddressType($request['addr_type'], $request, $data, $offset);
         if (!$ok) {
-            logger(LOG_DEBUG, '[udp]DNS resolve failed.');
-            return $udp_connection->close();
+            logger(LOG_ERR, '[udp] address parse failed, addr_type=' . $request['addr_type']);
+            return;
         }
 
         if ($request['addr_type'] == self::ADDRTYPE_HOST) {
             $request['dest_addr'] = Socks5::getDnsHost($request['dest_addr']);
         }
-        if (!$request['dest_addr']) {
-            logger(LOG_DEBUG, '[udp]send:' . bin2hex($data));
-            return $udp_connection->close();
+        if (empty($request['dest_addr'])) {
+            logger(LOG_ERR, '[udp] DNS resolve failed for host');
+            return;
         }
+
+        $payload = substr($data, $offset);
+        if ($payload === '' || $payload === false) {
+            logger(LOG_ERR, '[udp] empty payload');
+            return;
+        }
+
+        logger(LOG_DEBUG, '[udp] relay to ' . $request['dest_addr'] . ':' . $request['dest_port'] . ', payload:' . strlen($payload));
+        $header = substr($data, 0, $offset); // 保留头部用于响应
         $remote = new AsyncUdpConnection('udp://' . $request['dest_addr'] . ':' . $request['dest_port']);
-        $remote->onConnect = function ($remote) use ($data, $offset) {
-            $remote->send(substr($data, $offset));
+        $remote->onConnect = function ($remote) use ($payload) {
+            $remote->send($payload);
         };
-        $remote->onMessage = function ($remote, $recv) use ($data, $offset, $udp_connection) {
-            $udp_connection->close(substr($data, 0, $offset) . $recv);
+        $remote->onMessage = function ($remote, $recv) use ($header, $udp_connection) {
+            // 回复时加上原始SOCKS5 UDP头
+            $udp_connection->send($header . $recv);
+            $remote->close();
+            unset(self::$udpConnections[spl_object_id($remote)]);
+        };
+        $remote->onError = function ($remote, $err_code, $err_msg) use ($request) {
+            logger(LOG_ERR, '[udp] ' . $request['dest_addr'] . ':' . $request['dest_port'] . " connect fail: {$err_code} {$err_msg}");
             $remote->close();
             unset(self::$udpConnections[spl_object_id($remote)]);
         };
         $remote->connect();
-        //保存udp连接关联
-        self::$udpConnections[spl_object_id($remote)] = [$remote, time() + 3, $udp_connection];
+        // 保存udp连接关联，10秒超时
+        self::$udpConnections[spl_object_id($remote)] = [$remote, time() + 10, $udp_connection];
         return true;
     }
 }
