@@ -25,5 +25,7 @@ Socks5、Http代理
 ### HELP
     ./socks5.php -h
 
-phpacker build --php=8.2
+### 打包
+php -d phar.readonly=0 cli.php phar  
+phpacker build --php=8.2  
 
